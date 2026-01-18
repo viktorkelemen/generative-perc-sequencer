@@ -9,6 +9,11 @@
 ~guiUpdater !? { ~guiUpdater.stop };
 ~counterUpdater !? { ~counterUpdater.stop };
 
+// Initialize MIDI
+MIDIClient.init;
+~midiOut = MIDIOut.newByName("IAC Driver", "Bus 1").latency_(0);  // Default, will be updated
+~midiDestinations = MIDIClient.destinations;
+
 // SynthDef for percussion - Mark Fell style FM
 SynthDef(\perc, {
     arg freq = 440, amp = 0.5, pan = 0, dur = 0.1,
@@ -131,6 +136,12 @@ SynthDef(\perc3, {
 ~ratioRandom = 0.0;       // Random ratio variation per note
 ~bits = 8;                // Bit depth for perc3 (1-16)
 
+// MIDI parameters
+~midiEnabled = false;     // Send MIDI output
+~midiChannel = 0;         // MIDI channel (0-15)
+~midiDestIndex = 0;       // Index into MIDIClient.destinations
+~audioEnabled = true;     // Play internal synths
+
 // Control functions
 ~enableSeq  = { ~seqEnabled = true;  "ON".postln };
 ~disableSeq = { ~seqEnabled = false; "OFF".postln };
@@ -186,17 +197,30 @@ fork {
                     // Random pan
                     pan = rrand(~panSpread.neg, ~panSpread);
 
-                    // Use selected synth with FM parameters
-                    Synth(~synthType, [
-                        \freq, note.midicps,
-                        \amp, amp,
-                        \dur, ~noteDur,
-                        \pan, pan,
-                        \ratio, ~fmRatio + rrand(~ratioRandom.neg, ~ratioRandom),
-                        \index, ~fmIndex,
-                        \feedback, ~fmFeedback,
-                        \bits, ~bits
-                    ]);
+                    // MIDI output
+                    if (~midiEnabled) {
+                        var vel = (baseVel * randFactor).round.asInteger.clip(1, 127);
+                        ~midiOut.noteOn(~midiChannel, note, vel);
+                        // Schedule note off
+                        SystemClock.sched(~noteDur, {
+                            ~midiOut.noteOff(~midiChannel, note, 0);
+                            nil;
+                        });
+                    };
+
+                    // Internal audio synth
+                    if (~audioEnabled) {
+                        Synth(~synthType, [
+                            \freq, note.midicps,
+                            \amp, amp,
+                            \dur, ~noteDur,
+                            \pan, pan,
+                            \ratio, ~fmRatio + rrand(~ratioRandom.neg, ~ratioRandom),
+                            \index, ~fmIndex,
+                            \feedback, ~fmFeedback,
+                            \bits, ~bits
+                        ]);
+                    };
                 };
             };
 
@@ -224,6 +248,7 @@ fork {
     var panSlider, panNum, swingSlider, swingNum;
     var crescendoSlider, crescendoNum;
     var fmRatioNum, fmIndexNum, fmFeedbackNum, fmRatioRndNum, bitsNum;
+    var midiEnableBtn, audioEnableBtn, midiChannelNum, midiDestMenu;
     var modeButtons, presetButtons;
     var customNoteField;
     var presets;
@@ -240,7 +265,7 @@ fork {
 
     Window.allWindows.do { |w| if(w.name == "Perc Sequencer") { w.close } };
 
-    win = Window("Perc Sequencer", Rect(100, 100, 340, 860))
+    win = Window("Perc Sequencer", Rect(100, 100, 340, 950))
         .front
         .alwaysOnTop_(true);
 
@@ -276,6 +301,58 @@ fork {
 
     win.view.decorator.nextLine;
 
+    // === OUTPUT ===
+    StaticText(win, 320@15).string_("─── Output ───").align_(\center);
+
+    audioEnableBtn = Button(win, 100@30)
+        .states_([
+            ["Audio OFF", Color.white, Color.gray(0.4)],
+            ["Audio ON", Color.white, Color.green(0.5)]
+        ])
+        .value_(if(~audioEnabled) { 1 } { 0 })
+        .action_({ |btn|
+            ~audioEnabled = btn.value == 1;
+            ("Audio: " ++ if(~audioEnabled) { "ON" } { "OFF" }).postln;
+        });
+
+    midiEnableBtn = Button(win, 100@30)
+        .states_([
+            ["MIDI OFF", Color.white, Color.gray(0.4)],
+            ["MIDI ON", Color.white, Color.magenta(0.6)]
+        ])
+        .value_(if(~midiEnabled) { 1 } { 0 })
+        .action_({ |btn|
+            ~midiEnabled = btn.value == 1;
+            ("MIDI: " ++ if(~midiEnabled) { "ON" } { "OFF" }).postln;
+        });
+
+    StaticText(win, 40@30).string_("Ch:").align_(\right);
+    NumberBox(win, 35@30)
+        .value_(~midiChannel + 1)
+        .clipLo_(1).clipHi_(16)
+        .decimals_(0)
+        .action_({ |nb|
+            ~midiChannel = nb.value.asInteger - 1;
+            ("MIDI Channel: " ++ nb.value.asInteger).postln;
+        });
+
+    win.view.decorator.nextLine;
+
+    StaticText(win, 60@20).string_("MIDI Out:");
+    midiDestMenu = PopUpMenu(win, 250@20)
+        .items_(~midiDestinations.collect({ |d| d.device ++ " - " ++ d.name }))
+        .value_(~midiDestIndex)
+        .action_({ |menu|
+            ~midiDestIndex = menu.value;
+            if(~midiDestinations.size > 0) {
+                var dest = ~midiDestinations[~midiDestIndex];
+                ~midiOut = MIDIOut.newByName(dest.device, dest.name).latency_(0);
+                ("MIDI Output: " ++ dest.device ++ " - " ++ dest.name).postln;
+            };
+        });
+
+    win.view.decorator.nextLine;
+
     // === TIMING ===
     StaticText(win, 320@15).string_("─── Timing ───").align_(\center);
 
@@ -291,9 +368,9 @@ fork {
 
     StaticText(win, 60@20).string_("Duration");
     durSlider = Slider(win, 200@20)
-        .value_(~noteDur.linlin(0.01, 0.5, 0, 1))
+        .value_(~noteDur.linlin(0.01, 2.0, 0, 1))
         .action_({ |sl|
-            ~noteDur = sl.value.linlin(0, 1, 0.01, 0.5);
+            ~noteDur = sl.value.linlin(0, 1, 0.01, 2.0);
             durNum.string_(~noteDur.round(0.01).asString ++ " s");
         });
     durNum = StaticText(win, 50@20).string_("0.1 s");
