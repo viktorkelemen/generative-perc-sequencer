@@ -267,7 +267,8 @@ fork {
         bass: [24, 31, 36, 38],
         high: [72, 74, 76, 79],
         chromatic: [60, 61, 62, 63, 64, 65],
-        pentatonic: [60, 62, 64, 67, 69]
+        pentatonic: [60, 62, 64, 67, 69],
+        ableton16: (36..51).asArray  // Ableton Drum Rack first 16 pads (C1-D#2)
     );
 
     Window.allWindows.do { |w| if(w.name == "Perc Sequencer") { w.close } };
