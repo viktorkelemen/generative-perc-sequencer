@@ -11,8 +11,15 @@
 
 // Initialize MIDI
 MIDIClient.init;
-~midiOut = MIDIOut.newByName("IAC Driver", "Bus 1").latency_(0);  // Default, will be updated
 ~midiDestinations = MIDIClient.destinations;
+~midiOut = if(~midiDestinations.size > 0) {
+    var dest = ~midiDestinations[0];
+    ("MIDI initialized: " ++ dest.device ++ " - " ++ dest.name).postln;
+    MIDIOut.newByName(dest.device, dest.name).latency_(0);
+} {
+    "WARNING: No MIDI destinations found!".postln;
+    nil;
+};
 
 // SynthDef for percussion - Mark Fell style FM
 SynthDef(\perc, {
@@ -198,7 +205,7 @@ fork {
                     pan = rrand(~panSpread.neg, ~panSpread);
 
                     // MIDI output
-                    if (~midiEnabled) {
+                    if (~midiEnabled and: { ~midiOut.notNil }) {
                         var vel = (baseVel * randFactor).round.asInteger.clip(1, 127);
                         ~midiOut.noteOn(~midiChannel, note, vel);
                         // Schedule note off
@@ -340,14 +347,21 @@ fork {
 
     StaticText(win, 60@20).string_("MIDI Out:");
     midiDestMenu = PopUpMenu(win, 250@20)
-        .items_(~midiDestinations.collect({ |d| d.device ++ " - " ++ d.name }))
+        .items_(if(~midiDestinations.size > 0) {
+            ~midiDestinations.collect({ |d| d.device ++ " - " ++ d.name })
+        } { ["No MIDI destinations"] })
         .value_(~midiDestIndex)
         .action_({ |menu|
             ~midiDestIndex = menu.value;
             if(~midiDestinations.size > 0) {
                 var dest = ~midiDestinations[~midiDestIndex];
-                ~midiOut = MIDIOut.newByName(dest.device, dest.name).latency_(0);
-                ("MIDI Output: " ++ dest.device ++ " - " ++ dest.name).postln;
+                try {
+                    ~midiOut = MIDIOut.newByName(dest.device, dest.name).latency_(0);
+                    ("MIDI Output: " ++ dest.device ++ " - " ++ dest.name).postln;
+                } { |err|
+                    ("MIDI Error: " ++ err.errorString).postln;
+                    ~midiOut = nil;
+                };
             };
         });
 
